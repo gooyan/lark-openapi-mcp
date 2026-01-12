@@ -4,6 +4,7 @@ import { AllTools, AllToolsZh } from '../mcp-tool/tools';
 import { McpTool } from '../mcp-tool/types';
 import { larkOapiHandler } from '../mcp-tool/utils';
 import { logger } from '../utils/logger';
+import { authStore } from '../auth/store';
 
 export interface CallToolOptions {
   appId: string;
@@ -13,6 +14,7 @@ export interface CallToolOptions {
   params?: string;
   paramsFile?: string;
   userAccessToken?: string;
+  debug?: boolean;
 }
 
 export async function handleCallTool(toolName: string, options: CallToolOptions): Promise<void> {
@@ -56,19 +58,40 @@ export async function handleCallTool(toolName: string, options: CallToolOptions)
     appId: options.appId,
     appSecret: options.appSecret,
     domain: options.domain,
+    loggerLevel: options.debug ? (4 as any) : (1 as any), // 1 = error, 4 = debug
   });
 
-  // Handle user access token
-  if (options.userAccessToken) {
+  // Handle user access token - auto-fetch from authStore if not provided
+  let userAccessToken = options.userAccessToken;
+  if (!userAccessToken) {
+    try {
+      const storedTokenKey = await authStore.getLocalAccessToken(options.appId);
+      if (storedTokenKey) {
+        const tokenInfo = await authStore.getToken(storedTokenKey);
+        if (tokenInfo?.token) {
+          userAccessToken = tokenInfo.token;
+          if (options.debug) {
+            console.error('[CallTool] Using stored user access token');
+          }
+        }
+      }
+    } catch {
+      // Ignore errors when fetching stored token
+    }
+  }
+
+  if (userAccessToken) {
     params.useUAT = true;
   }
 
-  logger.info(`[CallTool] Calling tool: ${toolName}`);
+  if (options.debug) {
+    logger.info(`[CallTool] Calling tool: ${toolName}`);
+  }
 
   try {
     const handler = tool.customHandler || larkOapiHandler;
     const result = await handler(client, params, {
-      userAccessToken: options.userAccessToken,
+      userAccessToken,
       tool,
     });
 
