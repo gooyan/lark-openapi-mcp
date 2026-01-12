@@ -254,6 +254,48 @@ npx @larksuiteoapi/lark-mcp call docx.v1.document.rawContent \
   --params '{"document_id":"xxx"}'
 ```
 
+## Batch Mail Processing
+
+For batch processing emails with minimal AI token consumption, use the `mail-processor.js` script:
+
+```bash
+# One-command processing (recommended)
+node scripts/mail-processor.js process \
+  -a <your_app_id> -s <your_app_secret> \
+  --mailbox your@email.com \
+  --count 20 \
+  -o /tmp/mail-for-ai.txt
+
+# Then use AI to summarize
+cat /tmp/mail-for-ai.txt
+```
+
+**Step-by-step commands:**
+
+```bash
+# 1. Fetch email list
+node scripts/mail-processor.js fetch-list \
+  -a $APP_ID -s $APP_SECRET \
+  --mailbox your@email.com --count 20 \
+  -o /tmp/mail-list.json
+
+# 2. Fetch email details
+node scripts/mail-processor.js fetch-detail \
+  -a $APP_ID -s $APP_SECRET \
+  --mailbox your@email.com \
+  -i /tmp/mail-list.json -o /tmp/mail-details.json
+
+# 3. Parse HTML to plain text
+node scripts/mail-processor.js parse \
+  -i /tmp/mail-details.json -o /tmp/mail-parsed.json
+
+# 4. Export for AI
+node scripts/mail-processor.js export \
+  -i /tmp/mail-parsed.json -o /tmp/mail-for-ai.txt
+```
+
+**Token savings: ~99%** (from ~100KB HTML to ~1KB plain text per email)
+
 ## FAQ
 
 - [FAQ (Frequently Asked Questions)](./docs/troubleshooting/faq.md)
