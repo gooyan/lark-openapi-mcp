@@ -49,6 +49,9 @@ npm test
 
 ```bash
 node dist/cli.js list-tools [--language zh] [--filter <keyword>] [--verbose]
+
+# 列出所有工具（1291 个）
+node dist/cli.js list-tools -t preset.all -l zh
 ```
 
 ### describe
@@ -95,6 +98,23 @@ node scripts/mail-processor.js process \
 - 内容截断：默认 2000 字符/封，可通过 `--max-length` 调整
 - Token 节省：~99%（100KB HTML → 1KB 纯文本）
 
+## 工具统计
+
+使用 `preset.all` 可加载全部 1291 个工具，主要模块：
+
+| 模块 | 数量 | 说明 |
+|------|------|------|
+| corehr | 229 | 飞书人事 |
+| hire | 178 | 招聘 |
+| task | 74 | 飞书任务 |
+| contact | 70 | 通讯录 |
+| mail | 67 | 邮箱 |
+| im | 67 | 消息 |
+| vc | 55 | 视频会议 |
+| drive | 52 | 云文档 |
+| bitable | 46 | 多维表格 |
+| calendar | 41 | 日历 |
+
 ## 注意事项
 
 - 工具定义在 `src/mcp-tool/tools/en/` 和 `src/mcp-tool/tools/zh/` 目录
@@ -102,3 +122,13 @@ node scripts/mail-processor.js process \
 - CLI 命令需要在输出后调用 `process.exit()` 确保进程退出
 - 保持与上游兼容，现有命令（mcp、login 等）不变
 - 脚本中避免使用 `process` 作为函数名（与 Node.js 全局对象冲突）
+
+## 调试技巧
+
+- **构建问题**：submodule 克隆后需完整构建 `npm run build`，直接 `npx tsc` 可能遗漏模块
+- **输出分析**：CLI 输出通过管道 grep 可能匹配失败，建议先输出到文件再分析
+  ```bash
+  # 推荐方式
+  node dist/cli.js list-tools -t preset.all > /tmp/tools.json
+  grep 'task' /tmp/tools.json
+  ```
