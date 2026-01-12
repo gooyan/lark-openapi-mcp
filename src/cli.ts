@@ -7,6 +7,9 @@ import { currentVersion } from './utils/version';
 import { initMcpServerWithTransport } from './mcp-server';
 import { NODE_VERSION_MAJOR, OAPI_MCP_DEFAULT_ARGS, OAPI_MCP_ENV_ARGS } from './utils/constants';
 import { LoginHandler } from './cli/login-handler';
+import { handleListTools } from './cli/list-tools';
+import { handleDescribeTool } from './cli/describe-tool';
+import { handleCallTool } from './cli/call-tool';
 import { parseStringArray } from './utils/parser-string-array';
 import { LogLevel, logger } from './utils/logger';
 
@@ -141,6 +144,57 @@ program
       logger.setLevel(LogLevel.DEBUG);
     }
     await initMcpServerWithTransport('recall', options);
+  });
+
+// ============ CLI Tools Commands ============
+
+program
+  .command('list-tools')
+  .description('List available MCP tools')
+  .option('-l, --language <language>', '(Optional) Tools Language, zh or en (default: "en")')
+  .option(
+    '-t, --tools <tools>',
+    '(Optional) Filter by preset or tool names, separated by commas (default: "preset.default")',
+  )
+  .option('-f, --filter <keyword>', '(Optional) Filter tools by keyword in name or description')
+  .option('-v, --verbose', '(Optional) Show detailed tool information')
+  .option('--debug', '(Optional) Enable debug mode')
+  .action((options) => {
+    if (options.debug) {
+      logger.setLevel(LogLevel.DEBUG);
+    }
+    handleListTools(options);
+  });
+
+program
+  .command('describe <toolName>')
+  .description('Show detailed information about a specific tool')
+  .option('-l, --language <language>', '(Optional) Tools Language, zh or en (default: "en")')
+  .option('--debug', '(Optional) Enable debug mode')
+  .action((toolName, options) => {
+    if (options.debug) {
+      logger.setLevel(LogLevel.DEBUG);
+    }
+    handleDescribeTool(toolName, options);
+  });
+
+program
+  .command('call <toolName>')
+  .description('Call a specific MCP tool directly')
+  .option('-a, --app-id <appId>', 'Feishu/Lark App ID')
+  .option('-s, --app-secret <appSecret>', 'Feishu/Lark App Secret')
+  .option('-d, --domain <domain>', '(Optional) Feishu/Lark Domain (default: "https://open.feishu.cn")')
+  .option('-l, --language <language>', '(Optional) Tools Language, zh or en (default: "en")')
+  .option('--params <json>', '(Optional) Tool parameters as JSON string')
+  .option('--params-file <path>', '(Optional) Tool parameters from JSON file')
+  .option('-u, --user-access-token <token>', '(Optional) User Access Token for user-level APIs')
+  .option('--debug', '(Optional) Enable debug mode')
+  .action(async (toolName, options) => {
+    const mergedOptions = { ...OAPI_MCP_DEFAULT_ARGS, ...OAPI_MCP_ENV_ARGS, ...options };
+    if (mergedOptions.debug) {
+      logger.setLevel(LogLevel.DEBUG);
+    }
+    await handleCallTool(toolName, mergedOptions);
   });
 
 if (process.argv.length === 2) {

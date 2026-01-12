@@ -196,6 +196,64 @@ For detailed configuration options and deployment scenarios, please refer to our
 
 For detailed information about all available command line parameters and their usage, please refer to the [Command Line Reference](./docs/reference/cli/cli.md).
 
+## CLI Tools Commands
+
+In addition to starting the MCP server, lark-mcp provides direct CLI commands to interact with MCP tools without going through an AI agent.
+
+### List Available Tools
+
+```bash
+# List all default tools
+npx @larksuiteoapi/lark-mcp list-tools
+
+# List tools in Chinese
+npx @larksuiteoapi/lark-mcp list-tools -l zh
+
+# Filter tools by keyword
+npx @larksuiteoapi/lark-mcp list-tools --filter message
+
+# Show verbose information
+npx @larksuiteoapi/lark-mcp list-tools -v
+```
+
+### Describe a Tool
+
+```bash
+# Show detailed information about a specific tool
+npx @larksuiteoapi/lark-mcp describe im.v1.message.create
+
+# Show in Chinese
+npx @larksuiteoapi/lark-mcp describe im.v1.message.create -l zh
+```
+
+### Call a Tool Directly
+
+```bash
+# Call a tool with parameters
+npx @larksuiteoapi/lark-mcp call im.v1.chat.list \
+  -a <your_app_id> \
+  -s <your_app_secret>
+
+# Call with JSON parameters
+npx @larksuiteoapi/lark-mcp call im.v1.message.create \
+  -a <your_app_id> \
+  -s <your_app_secret> \
+  --params '{"receive_id_type":"chat_id","receive_id":"oc_xxx","msg_type":"text","content":"{\"text\":\"Hello\"}"}'
+
+# Call with parameters from file
+npx @larksuiteoapi/lark-mcp call im.v1.message.create \
+  -a <your_app_id> \
+  -s <your_app_secret> \
+  --params-file params.json
+
+# Call with user access token (for user-level APIs)
+npx @larksuiteoapi/lark-mcp call docx.v1.document.rawContent \
+  -a <your_app_id> \
+  -s <your_app_secret> \
+  -u <user_access_token> \
+  --params '{"document_id":"xxx"}'
+```
+
 ## FAQ
 
 - [FAQ (Frequently Asked Questions)](./docs/troubleshooting/faq.md)
