@@ -65,8 +65,17 @@ node dist/cli.js describe <toolName> [--language zh]
 直接调用 MCP 工具。
 
 ```bash
+# 基本用法（自动使用已登录的 token）
 node dist/cli.js call <toolName> -a <appId> -s <appSecret> [--params <json>]
+
+# 显式指定 user access token
+node dist/cli.js call <toolName> -a <appId> -s <appSecret> -u <token>
+
+# 开启调试模式
+node dist/cli.js call <toolName> -a <appId> -s <appSecret> --debug
 ```
+
+> 登录后（`login` 命令），`call` 会自动使用存储的 user access token，无需手动传入 `-u`。
 
 ## 批量邮件处理脚本
 
