@@ -16,15 +16,20 @@ export function handleListTools(options: ListToolsOptions): void {
   const allTools = isZH ? AllToolsZh : AllTools;
 
   // Parse tools option
-  let toolNames = defaultToolNames;
+  let toolNames: any[] = defaultToolNames;
   if (options.tools) {
     const toolsArray = parseStringArray(options.tools);
-    toolNames = [];
-    for (const tool of toolsArray) {
-      if (tool.startsWith('preset.') && presetTools[tool as PresetName]) {
-        toolNames.push(...presetTools[tool as PresetName]);
-      } else {
-        toolNames.push(tool as any);
+    // Special case: preset.all returns all tools
+    if (toolsArray.includes(PresetName.ALL)) {
+      toolNames = [PresetName.ALL];
+    } else {
+      toolNames = [];
+      for (const tool of toolsArray) {
+        if (tool.startsWith('preset.') && presetTools[tool as PresetName]) {
+          toolNames.push(...presetTools[tool as PresetName]);
+        } else {
+          toolNames.push(tool as any);
+        }
       }
     }
   }

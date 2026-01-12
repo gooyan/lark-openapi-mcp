@@ -1,7 +1,13 @@
 import { ToolName, ProjectName } from '../tools';
 import { McpTool, ToolsFilterOptions, TokenMode } from '../types';
+import { PresetName } from '../constants';
 
 export function filterTools(tools: McpTool[], options: ToolsFilterOptions) {
+  // Handle preset.all - return all tools without filtering
+  if (options.allowTools?.includes(PresetName.ALL as any)) {
+    return tools;
+  }
+
   let filteredTools = tools.filter(
     (tool) =>
       options.allowTools?.includes(tool.name as ToolName) ||

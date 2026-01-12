@@ -6,6 +6,10 @@ import { ToolName } from './tools';
 
 export enum PresetName {
   /**
+   * All available tools
+   */
+  ALL = 'preset.all',
+  /**
    * Default preset including IM, Bitable, Doc and Contact tools
    */
   LIGHT = 'preset.light',
@@ -114,6 +118,7 @@ export const defaultToolNames: ToolName[] = [
 ];
 
 export const presetTools: Record<PresetName, ToolName[]> = {
+  [PresetName.ALL]: [], // Special case: handled in filter-tools.ts
   [PresetName.LIGHT]: presetLightToolNames,
   [PresetName.DEFAULT]: defaultToolNames,
   [PresetName.IM_DEFAULT]: presetImToolNames,
