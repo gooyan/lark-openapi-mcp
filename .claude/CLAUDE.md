@@ -77,6 +77,38 @@ node dist/cli.js call <toolName> -a <appId> -s <appSecret> --debug
 
 > 登录后（`login` 命令），`call` 会自动使用存储的 user access token，无需手动传入 `-u`。
 
+## 常见用例
+
+### 读取飞书 Wiki 文档
+
+从 wiki URL（如 `https://xxx.feishu.cn/wiki/<token>`）读取文档内容，需要两步：
+
+**步骤 1**：获取节点信息，得到实际文档 ID
+
+```bash
+node dist/cli.js call wiki.v2.space.getNode \
+  -a $FEISHU_APP_ID -s $FEISHU_APP_SECRET \
+  --params '{"params": {"token": "<wiki_token>"}}'
+```
+
+返回结果包含：
+- `obj_type`: 文档类型（docx/sheet/bitable 等）
+- `obj_token`: 实际文档 ID
+
+**步骤 2**：获取文档纯文本内容
+
+```bash
+node dist/cli.js call docx.v1.document.rawContent \
+  -a $FEISHU_APP_ID -s $FEISHU_APP_SECRET \
+  --params '{"path": {"document_id": "<obj_token>"}}'
+```
+
+**参数格式说明**：
+- GET 请求的 query 参数放在 `params` 下
+- 路径参数（如 `:document_id`）放在 `path` 下
+
+**权限要求**：应用需添加 `wiki:wiki:readonly`、`docx:document:readonly` 权限。
+
 ## 批量邮件处理脚本
 
 `scripts/mail-processor.js` - 批量处理邮件，节省 AI token
