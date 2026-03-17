@@ -1,0 +1,605 @@
+#!/usr/bin/env python3
+"""feishu - 飞书薄封装 CLI
+
+薄封装 lark-mcp-cli，提供高频操作的人性化接口。
+零依赖，所有参数命令行传入。
+"""
+
+import argparse
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+# --- Paths (derived from script location) ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CLI_DIR = os.path.dirname(SCRIPT_DIR)
+CLI_JS = os.path.join(CLI_DIR, 'dist', 'cli.js')
+MAIL_PROCESSOR = os.path.join(SCRIPT_DIR, 'mail-processor.js')
+
+CST = timezone(timedelta(hours=8))
+
+
+# ============================================================
+# Runner
+# ============================================================
+
+def get_credentials():
+    app_id = os.environ.get('FEISHU_APP_ID')
+    app_secret = os.environ.get('FEISHU_APP_SECRET')
+    if not app_id or not app_secret:
+        print('Error: FEISHU_APP_ID and FEISHU_APP_SECRET must be set', file=sys.stderr)
+        sys.exit(1)
+    return app_id, app_secret
+
+
+def call_tool(tool_name, params=None, debug=False):
+    """Call lark-mcp-cli tool, return parsed data dict."""
+    app_id, app_secret = get_credentials()
+    cmd = ['node', CLI_JS, 'call', tool_name, '-a', app_id, '-s', app_secret]
+    if params:
+        cmd.extend(['--params', json.dumps(params, ensure_ascii=False)])
+
+    if debug:
+        print(f'DEBUG cmd: {" ".join(cmd)}', file=sys.stderr)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if debug:
+        if result.stdout:
+            print(f'DEBUG stdout: {result.stdout[:1000]}', file=sys.stderr)
+        if result.stderr:
+            print(f'DEBUG stderr: {result.stderr[:500]}', file=sys.stderr)
+
+    # Token expiry detection
+    if result.stderr and 'UserAccessToken is invalid' in result.stderr:
+        print('Error: Token expired. Run:', file=sys.stderr)
+        print(f'  cd {CLI_DIR} && node dist/cli.js login -a $FEISHU_APP_ID -s $FEISHU_APP_SECRET', file=sys.stderr)
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print(f'Error: {result.stderr.strip()}', file=sys.stderr)
+        sys.exit(1)
+
+    # Parse MCP response: {"content": [{"type": "text", "text": "<json>"}]}
+    try:
+        mcp = json.loads(result.stdout)
+        data_str = mcp['content'][0]['text']
+        return json.loads(data_str)
+    except (json.JSONDecodeError, KeyError, IndexError):
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {'raw': result.stdout}
+
+
+# ============================================================
+# Output Utils
+# ============================================================
+
+def decode_base64(s):
+    if not s:
+        return ''
+    try:
+        return base64.b64decode(s).decode('utf-8')
+    except Exception:
+        return s
+
+
+def html_to_text(html):
+    if not html:
+        return ''
+    text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', html, flags=re.I)
+    text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', text, flags=re.I)
+    for entity, char in [('&nbsp;', ' '), ('&amp;', '&'), ('&lt;', '<'),
+                         ('&gt;', '>'), ('&quot;', '"'), ('&#39;', "'")]:
+        text = text.replace(entity, char)
+    text = re.sub(r'<\/?(p|div|br|h[1-6]|li|tr)[^>]*>', '\n', text, flags=re.I)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'&#(\d+);', lambda m: chr(int(m.group(1))), text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    return text.strip()
+
+
+def format_ts(ts):
+    """Unix timestamp (seconds or ms) → 'YYYY-MM-DD HH:MM'"""
+    if not ts:
+        return ''
+    ts = int(ts)
+    if ts > 1e12:
+        ts //= 1000
+    return datetime.fromtimestamp(ts, tz=CST).strftime('%Y-%m-%d %H:%M')
+
+
+def print_table(headers, rows):
+    if not rows:
+        print('(empty)')
+        return
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(str(cell)))
+    cap = [60, 40, 30, 30, 20, 20]
+    widths = [min(w, cap[i]) if i < len(cap) else w for i, w in enumerate(widths)]
+
+    print('  '.join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+    print('  '.join('-' * w for w in widths))
+    for row in rows:
+        print('  '.join(str(c)[:widths[i]].ljust(widths[i]) for i, c in enumerate(row)))
+
+
+# ============================================================
+# Mail Commands
+# ============================================================
+
+def cmd_mail_list(args):
+    app_id, app_secret = get_credentials()
+    tmpdir = tempfile.mkdtemp(prefix='feishu-mail-')
+
+    cmd = [
+        'node', MAIL_PROCESSOR, 'process',
+        '-a', app_id, '-s', app_secret,
+        '--mailbox', args.mailbox,
+        '--count', str(args.count),
+        '--tmp-dir', tmpdir,
+        '-o', os.path.join(tmpdir, 'export.txt'),
+    ]
+
+    if args.debug:
+        print(f'DEBUG cmd: {" ".join(cmd)}', file=sys.stderr)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if args.debug and result.stderr:
+        print(f'DEBUG stderr: {result.stderr[:500]}', file=sys.stderr)
+
+    if result.returncode != 0:
+        print(f'Error: {result.stderr.strip()}', file=sys.stderr)
+        sys.exit(1)
+
+    parsed_file = os.path.join(tmpdir, 'mail-parsed.json')
+    try:
+        with open(parsed_file) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print('Error: mail processing failed — no parsed output', file=sys.stderr)
+        sys.exit(1)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    print(f'{data.get("mailbox", "")} ({data.get("count", 0)} messages)\n')
+    headers = ['#', 'Subject', 'From', 'Date']
+    rows = []
+    for i, msg in enumerate(data.get('messages', []), 1):
+        rows.append([
+            str(i),
+            msg.get('subject', '')[:50],
+            msg.get('from', '')[:30],
+            msg.get('date', ''),
+        ])
+    print_table(headers, rows)
+
+    print()
+    for i, msg in enumerate(data.get('messages', []), 1):
+        print(f'  [{i}] id={msg.get("id", "")}')
+
+
+def cmd_mail_read(args):
+    data = call_tool('mail.v1.userMailboxMessage.get', {
+        'path': {
+            'user_mailbox_id': args.mailbox,
+            'message_id': args.id,
+        }
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    msg = data.get('message', data)
+    from_info = msg.get('from', {})
+    from_str = from_info.get('mail_address', '')
+    if from_info.get('name'):
+        from_str = f'{from_info["name"]} <{from_str}>'
+
+    body = ''
+    if msg.get('body_plain'):
+        body = decode_base64(msg['body_plain'])
+    elif msg.get('body_html'):
+        body = html_to_text(decode_base64(msg['body_html']))
+
+    print(f'Subject: {msg.get("subject", "")}')
+    print(f'From: {from_str}')
+    print(f'Date: {msg.get("date", "")}')
+    print('---')
+    print(body)
+
+
+def cmd_mail_send(args):
+    body_b64 = base64.b64encode(args.body.encode('utf-8')).decode('utf-8')
+    to_list = [{'mail_address': a.strip()} for a in args.to.split(',')]
+
+    data = call_tool('mail.v1.userMailboxMessage.send', {
+        'path': {'user_mailbox_id': args.mailbox},
+        'data': {
+            'subject': args.subject,
+            'to': to_list,
+            'body_plain': body_b64,
+        }
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print('Sent')
+
+
+def cmd_mail_folders(args):
+    data = call_tool('mail.v1.userMailboxFolder.list', {
+        'path': {'user_mailbox_id': args.mailbox},
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    headers = ['Name', 'ID', 'Count']
+    rows = []
+    for f in data.get('items', []):
+        rows.append([f.get('name', ''), f.get('folder_id', ''), str(f.get('total_count', ''))])
+    print_table(headers, rows)
+
+
+def cmd_mail_boxes(args):
+    data = call_tool('mail.v1.publicMailbox.list', {}, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    headers = ['Email', 'Name', 'ID']
+    rows = []
+    for b in data.get('items', []):
+        rows.append([b.get('email', ''), b.get('name', ''), b.get('public_mailbox_id', '')])
+    print_table(headers, rows)
+
+
+# ============================================================
+# Task Commands
+# ============================================================
+
+def cmd_task_list(args):
+    data = call_tool('task.v2.task.list', {
+        'params': {'page_size': args.count}
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    items = data.get('items', [])
+    headers = ['#', 'Title', 'Due', 'Status']
+    rows = []
+    for i, t in enumerate(items, 1):
+        due = format_ts(t['due'].get('timestamp')) if t.get('due') else ''
+        status = 'done' if t.get('completed_at') else 'open'
+        rows.append([str(i), t.get('summary', '')[:50], due, status])
+    print_table(headers, rows)
+
+    print()
+    for i, t in enumerate(items, 1):
+        print(f'  [{i}] id={t.get("guid", "")}')
+
+
+def cmd_task_create(args):
+    data = call_tool('task.v2.task.create', {
+        'data': {'summary': args.title}
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        task = data.get('task', data)
+        print(f'Created: {task.get("summary", "")} (id={task.get("guid", "")})')
+
+
+def cmd_task_done(args):
+    now = int(datetime.now(tz=CST).timestamp())
+    data = call_tool('task.v2.task.patch', {
+        'path': {'task_guid': args.task_id},
+        'params': {'update_fields': 'completed_at'},
+        'data': {'completed_at': str(now)},
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print(f'Done: {args.task_id}')
+
+
+def cmd_task_view(args):
+    data = call_tool('task.v2.task.get', {
+        'path': {'task_guid': args.task_id},
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    task = data.get('task', data)
+    print(f'Title: {task.get("summary", "")}')
+    print(f'ID: {task.get("guid", "")}')
+    print(f'Status: {"done" if task.get("completed_at") else "open"}')
+    if task.get('due'):
+        print(f'Due: {format_ts(task["due"].get("timestamp"))}')
+    if task.get('description'):
+        print(f'Description: {task["description"]}')
+
+
+def cmd_task_delete(args):
+    call_tool('task.v2.task.delete', {
+        'path': {'task_guid': args.task_id},
+    }, debug=args.debug)
+    print(f'Deleted: {args.task_id}')
+
+
+# ============================================================
+# Calendar Commands
+# ============================================================
+
+def cmd_calendar_today(args):
+    now = datetime.now(tz=CST)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+
+    data = call_tool('calendar.v4.calendarEvent.instanceView', {
+        'path': {'calendar_id': args.cal},
+        'params': {
+            'start_time': str(int(start.timestamp())),
+            'end_time': str(int(end.timestamp())),
+        }
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    items = data.get('items', [])
+    if not items:
+        print(f'{now.strftime("%Y-%m-%d")} — no events')
+        return
+
+    print(f'{now.strftime("%Y-%m-%d")} ({len(items)} events)\n')
+    for ev in items:
+        s = format_ts(ev.get('start_time', {}).get('timestamp', ''))
+        e = format_ts(ev.get('end_time', {}).get('timestamp', ''))
+        s_time = s.split(' ')[1] if ' ' in s else s
+        e_time = e.split(' ')[1] if ' ' in e else e
+        print(f'  {s_time}-{e_time}  {ev.get("summary", "No Title")}')
+        if ev.get('event_id'):
+            print(f'    id={ev["event_id"]}')
+
+
+def cmd_calendar_create(args):
+    now = datetime.now(tz=CST)
+    date_str = args.date or now.strftime('%Y-%m-%d')
+
+    start_dt = datetime.strptime(f'{date_str} {args.start}', '%Y-%m-%d %H:%M').replace(tzinfo=CST)
+    end_dt = datetime.strptime(f'{date_str} {args.end}', '%Y-%m-%d %H:%M').replace(tzinfo=CST)
+
+    data = call_tool('calendar.v4.calendarEvent.create', {
+        'path': {'calendar_id': args.cal},
+        'data': {
+            'summary': args.title,
+            'start_time': {'timestamp': str(int(start_dt.timestamp()))},
+            'end_time': {'timestamp': str(int(end_dt.timestamp()))},
+        }
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        ev = data.get('event', data)
+        print(f'Created: {ev.get("summary", "")} (id={ev.get("event_id", "")})')
+
+
+def cmd_calendar_delete(args):
+    call_tool('calendar.v4.calendarEvent.delete', {
+        'path': {
+            'calendar_id': args.cal,
+            'event_id': args.event_id,
+        }
+    }, debug=args.debug)
+    print(f'Deleted: {args.event_id}')
+
+
+# ============================================================
+# Doc Commands
+# ============================================================
+
+def cmd_doc_search(args):
+    data = call_tool('docx.builtin.search', {
+        'params': {
+            'search_key': args.keyword,
+            'count': args.count,
+            'owner_ids': [],
+            'chat_ids': [],
+            'docs_types': [],
+        }
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
+    items = data.get('docs_entities', data.get('items', []))
+    if not items:
+        print('No results')
+        return
+
+    headers = ['#', 'Title', 'Type', 'URL']
+    rows = []
+    for i, doc in enumerate(items, 1):
+        rows.append([
+            str(i),
+            doc.get('title', '')[:40],
+            doc.get('docs_type', ''),
+            doc.get('url', doc.get('docs_token', '')),
+        ])
+    print_table(headers, rows)
+
+
+def cmd_doc_read(args):
+    token = args.url_or_token
+    is_wiki = False
+
+    # Parse URL → extract token
+    if '/' in token:
+        if '/wiki/' in token:
+            is_wiki = True
+            token = token.split('/wiki/')[-1].split('?')[0].split('/')[0]
+        elif '/docx/' in token:
+            token = token.split('/docx/')[-1].split('?')[0].split('/')[0]
+        else:
+            token = token.rstrip('/').split('/')[-1].split('?')[0]
+
+    # Wiki: resolve node → actual doc token
+    if is_wiki:
+        node_data = call_tool('wiki.v2.space.getNode', {
+            'params': {'token': token}
+        }, debug=args.debug)
+        node = node_data.get('node', {})
+        if args.debug:
+            print(f'DEBUG wiki node: type={node.get("obj_type")}, token={node.get("obj_token")}',
+                  file=sys.stderr)
+        token = node.get('obj_token', token)
+
+    data = call_tool('docx.v1.document.rawContent', {
+        'path': {'document_id': token}
+    }, debug=args.debug)
+
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print(data.get('content', str(data)))
+
+
+# ============================================================
+# Argparse Setup
+# ============================================================
+
+def main():
+    # Shared flags
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument('--json', action='store_true', help='Output raw JSON')
+    shared.add_argument('--debug', action='store_true', help='Show debug info')
+
+    parser = argparse.ArgumentParser(prog='feishu', description='飞书薄封装 CLI')
+    subs = parser.add_subparsers(dest='command')
+
+    # --- mail ---
+    p_mail = subs.add_parser('mail')
+    s_mail = p_mail.add_subparsers(dest='sub')
+
+    p = s_mail.add_parser('list', parents=[shared])
+    p.add_argument('--count', type=int, default=10)
+    p.add_argument('--mailbox', required=True)
+    p.set_defaults(func=cmd_mail_list)
+
+    p = s_mail.add_parser('read', parents=[shared])
+    p.add_argument('id')
+    p.add_argument('--mailbox', required=True)
+    p.set_defaults(func=cmd_mail_read)
+
+    p = s_mail.add_parser('send', parents=[shared])
+    p.add_argument('--to', required=True)
+    p.add_argument('--subject', required=True)
+    p.add_argument('--body', required=True)
+    p.add_argument('--mailbox', required=True)
+    p.set_defaults(func=cmd_mail_send)
+
+    p = s_mail.add_parser('folders', parents=[shared])
+    p.add_argument('--mailbox', required=True)
+    p.set_defaults(func=cmd_mail_folders)
+
+    p = s_mail.add_parser('boxes', parents=[shared])
+    p.set_defaults(func=cmd_mail_boxes)
+
+    # --- task ---
+    p_task = subs.add_parser('task')
+    s_task = p_task.add_subparsers(dest='sub')
+
+    p = s_task.add_parser('list', parents=[shared])
+    p.add_argument('--count', type=int, default=20)
+    p.set_defaults(func=cmd_task_list)
+
+    p = s_task.add_parser('create', parents=[shared])
+    p.add_argument('title')
+    p.set_defaults(func=cmd_task_create)
+
+    p = s_task.add_parser('done', parents=[shared])
+    p.add_argument('task_id')
+    p.set_defaults(func=cmd_task_done)
+
+    p = s_task.add_parser('view', parents=[shared])
+    p.add_argument('task_id')
+    p.set_defaults(func=cmd_task_view)
+
+    p = s_task.add_parser('delete', parents=[shared])
+    p.add_argument('task_id')
+    p.set_defaults(func=cmd_task_delete)
+
+    # --- calendar ---
+    p_cal = subs.add_parser('calendar')
+    s_cal = p_cal.add_subparsers(dest='sub')
+
+    p = s_cal.add_parser('today', parents=[shared])
+    p.add_argument('--cal', required=True, help='Calendar ID')
+    p.set_defaults(func=cmd_calendar_today)
+
+    p = s_cal.add_parser('create', parents=[shared])
+    p.add_argument('--title', required=True)
+    p.add_argument('--start', required=True, help='HH:MM')
+    p.add_argument('--end', required=True, help='HH:MM')
+    p.add_argument('--date', help='YYYY-MM-DD (default: today)')
+    p.add_argument('--cal', required=True)
+    p.set_defaults(func=cmd_calendar_create)
+
+    p = s_cal.add_parser('delete', parents=[shared])
+    p.add_argument('event_id')
+    p.add_argument('--cal', required=True)
+    p.set_defaults(func=cmd_calendar_delete)
+
+    # --- doc ---
+    p_doc = subs.add_parser('doc')
+    s_doc = p_doc.add_subparsers(dest='sub')
+
+    p = s_doc.add_parser('search', parents=[shared])
+    p.add_argument('keyword')
+    p.add_argument('--count', type=int, default=10)
+    p.set_defaults(func=cmd_doc_search)
+
+    p = s_doc.add_parser('read', parents=[shared])
+    p.add_argument('url_or_token')
+    p.set_defaults(func=cmd_doc_read)
+
+    # --- Parse & dispatch ---
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    if hasattr(args, 'func'):
+        args.func(args)
+    else:
+        {'mail': p_mail, 'task': p_task, 'calendar': p_cal, 'doc': p_doc}[args.command].print_help()
+
+
+if __name__ == '__main__':
+    main()
