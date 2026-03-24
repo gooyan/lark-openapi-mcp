@@ -85,7 +85,11 @@ def decode_base64(s):
     if not s:
         return ''
     try:
-        return base64.b64decode(s).decode('utf-8')
+        # Try standard base64 first, then URL-safe (Feishu uses - and _ instead of + and /)
+        try:
+            return base64.b64decode(s).decode('utf-8')
+        except Exception:
+            return base64.urlsafe_b64decode(s + '==').decode('utf-8')
     except Exception:
         return s
 
@@ -192,12 +196,31 @@ def cmd_mail_list(args):
 
 
 def cmd_mail_read(args):
-    data = call_tool('mail.v1.userMailboxMessage.get', {
-        'path': {
-            'user_mailbox_id': args.mailbox,
-            'message_id': args.id,
-        }
-    }, debug=args.debug)
+    """Read a single email using Node SDK directly (bypasses call-tool bug)."""
+    app_id, app_secret = get_credentials()
+    node_script = f'''
+const {{ Client }} = require("@larksuiteoapi/node-sdk");
+const client = new Client({{ appId: "{app_id}", appSecret: "{app_secret}", domain: "https://open.feishu.cn", loggerLevel: 1 }});
+(async () => {{
+    const res = await client.mail.v1.userMailboxMessage.get({{
+        path: {{ user_mailbox_id: "{args.mailbox}", message_id: "{args.id}" }},
+    }});
+    process.stdout.write(JSON.stringify(res.data || {{}}));
+}})().catch(e => {{ process.stderr.write(e.message); process.exit(1); }});
+'''
+    result = subprocess.run(
+        ['node', '-e', node_script],
+        capture_output=True, text=True, cwd=CLI_DIR,
+    )
+    if args.debug:
+        if result.stderr:
+            print(f'DEBUG stderr: {result.stderr[:500]}', file=sys.stderr)
+
+    if result.returncode != 0:
+        print(f'Error: {result.stderr.strip()}', file=sys.stderr)
+        sys.exit(1)
+
+    data = json.loads(result.stdout) if result.stdout else {}
 
     if args.json:
         print(json.dumps(data, indent=2, ensure_ascii=False))
