@@ -34,4 +34,4 @@ Thumbs.db
 coverage/
 .nyc_output/ 
 
-api-json
+api-jsonscripts/__pycache__/
